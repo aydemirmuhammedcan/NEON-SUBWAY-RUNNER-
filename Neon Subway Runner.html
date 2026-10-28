@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Neon Subway Runner</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <!-- Three.js CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #0b0f19;
+            font-family: system-ui, -apple-system, sans-serif;
+            touch-action: none;
+            user-select: none;
+        }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+    </style>
+</head>
+<body class="relative w-screen h-screen overflow-hidden bg-slate-950">
+
+    <!-- Game Canvas Container -->
+    <div id="canvas-container" class="absolute inset-0 z-0"></div>
+
+    <!-- HUD / UI Overlay -->
+    <div id="ui-layer" class="absolute inset-0 z-10 pointer-events-none flex flex-col justify-between p-6">
+        <!-- Top Stats -->
+        <div class="flex justify-between items-center w-full max-w-2xl mx-auto">
+            <div class="bg-slate-900/80 backdrop-blur-md border border-cyan-500/30 px-5 py-2.5 rounded-2xl shadow-lg shadow-cyan-500/10 flex items-center gap-3">
+                <span class="text-cyan-400 font-bold text-lg"> skoru</span>
+                <span id="score-val" class="text-white font-black text-2xl tracking-wider">0</span>
+            </div>
+            <div class="bg-slate-900/80 backdrop-blur-md border border-amber-500/30 px-5 py-2.5 rounded-2xl shadow-lg shadow-amber-500/10 flex items-center gap-3">
+                <span class="text-amber-400 font-bold text-lg">💰 Altın</span>
+                <span id="coins-val" class="text-white font-black text-2xl tracking-wider">0</span>
+            </div>
+        </div>
+
+        <!-- Center Start / Game Over Screen -->
+        <div id="menu-screen" class="absolute inset-0 bg-slate-950/80 backdrop-blur-sm pointer-events-auto flex flex-col items-center justify-center p-4">
+            <div class="bg-slate-900/90 border border-cyan-500/40 p-8 rounded-3xl shadow-2xl shadow-cyan-500/20 max-w-md w-full text-center flex flex-col items-center">
+                <h1 class="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-indigo-500 mb-2 tracking-wider">NEON RUNNER</h1>
+                <p id="menu-subtitle" class="text-slate-400 mb-6 text-sm">A, D veya Ok Tuşları ile Şerit Değiştir.<br>W / Yukarı Zıpla, S / Aşağı Eğil.</p>
+                
+                <div id="final-stats" class="hidden mb-6 w-full bg-slate-800/60 p-4 rounded-xl border border-slate-700">
+                    <p class="text-slate-300 text-sm">Oyun Bitti!</p>
+                    <p class="text-white font-bold text-lg">Skor: <span id="final-score" class="text-cyan-400">0</span></p>
+                    <p class="text-white font-bold text-lg">Toplanan Altın: <span id="final-coins" class="text-amber-400">0</span></p>
+                </div>
+
+                <button id="start-btn" class="w-full py-4 bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-black text-xl rounded-2xl shadow-lg shadow-cyan-500/30 transition-all transform active:scale-95 cursor-pointer">
+                    OYUNA BAŞLA
+                </button>
+            </div>
+        </div>
+
+        <!-- Mobile Touch Controls Helper (Visual) -->
+        <div class="pointer-events-none text-center pb-2 text-slate-500 text-xs md:hidden">
+            Parmağınızı sola/sağa kaydırın • Yukarı zıpla • Aşağı eğil
+        </div>
+    </div>
+
+    <!-- Game Logic Script -->
+    <script>
+        // --- GAME VARIABLES ---
+        let scene, camera, renderer;
+        let player;
+        let obstacles = [];
+        let coins = [];
+        let trackSegments = [];
+
+        let gameStarted = false;
+        let gameOver = false;
+        let score = 0;
+        let coinCount = 0;
+
+        let gameSpeed = 0.4;        // Düşük ve dengeli başlangıç hızı
+        const maxGameSpeed = 0.9;
+        const acceleration = 0.00005;
+
+        // Lanes: -2.5 (Sol), 0 (Orta), 2.5 (Sağ)
+        const lanes = [-2.5, 0, 2.5];
+        let currentLaneIndex = 1; // Başlangıçta orta şerit
+
+        // Player movement physics states
+        let targetX = 0;
+        let isJumping = false;
+        let jumpVelocity = 0;
+        const gravity = -0.015;
+        const jumpForce = 0.32;
+
+        let isCrouching = false;
+        let crouchTimer = 0;
+
+        let lastSpawnZ = -50;
+        const spawnDistanceInterval = 25;
+
+        // --- INIT THREE.JS ---
+        function init() {
+            const container = document.getElementById('canvas-container');
+
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x060913);
+            scene.fog = new THREE.FogExp2(0x060913, 0.025);
+
+            // Camera
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 4, 8);
+            camera.lookAt(0, 1, -5);
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0x00ffff, 0.8);
+            dirLight.position.set(10, 20, 10);
+            scene.add(dirLight);
+
+            const pointLight = new THREE.PointLight(0xff00ff, 1, 50);
+            pointLight.position.set(0, 5, -10);
+            scene.add(pointLight);
+
+            // Create Environment Tracks
+            createTracks();
+
+            // Create Player
+            createPlayer();
+
+            // Window Resize
+            window.addEventListener('resize', onWindowResize);
+
+            // Input Listeners
+            setupControls();
+
+            // Animation Loop
+            animate();
+        }
+
+        // --- TRACKS CREATION ---
+        function createTracks() {
+            const trackWidth = 9;
+            const trackLength = 200;
+            const geometry = new THREE.PlaneGeometry(trackWidth, trackLength);
+            
+            // Grid texture look via material
+            const material = new THREE.MeshStandardMaterial({
+                color: 0x0f172a,
+                roughness: 0.8,
+                metalness: 0.2,
+                wireframe: false
+            });
+
+            const track = new THREE.Mesh(geometry, material);
+            track.rotation.x = -Math.PI / 2;
+            track.position.set(0, 0, -trackLength / 2 + 10);
+            scene.add(track);
+            trackSegments.push(track);
+
+            // Neon Lane Lines
+            for (let i = -1; i <= 1; i++) {
+                if(i === 0) continue;
+                const lineGeo = new THREE.BoxGeometry(0.1, 0.05, trackLength);
+                const lineMat = new THREE.MeshBasicMaterial({ color: 0x00f3ff });
+                const line = new THREE.Mesh(lineGeo, lineMat);
+                line.position.set(i * 2.5, 0.02, -trackLength / 2 + 10);
+                scene.add(line);
+            }
+        }
+
+        // --- PLAYER CREATION ---
+        function createPlayer() {
+            const group = new THREE.Group();
+
+            // Body
+            const bodyGeo = new THREE.BoxGeometry(0.8, 1.2, 0.5);
+            const bodyMat = new THREE.MeshStandardMaterial({ color: 0x00ffff, roughness: 0.3, emissive: 0x004444 });
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            body.position.y = 0.6;
+            group.add(body);
+
+            // Head
+            const headGeo = new THREE.BoxGeometry(0.5, 0.5, 0.5);
+            const headMat = new THREE.MeshStandardMaterial({ color: 0xff00ff, roughness: 0.2, emissive: 0x440044 });
+            const head = new THREE.Mesh(headGeo, headMat);
+            head.position.y = 1.45;
+            group.add(head);
+
+            player = group;
+            player.position.set(lanes[currentLaneIndex], 0, 0);
+            scene.add(player);
+        }
+
+        // --- PROCEDURAL GENERATION (OBSTACLES & COINS) ---
+        function checkAndSpawnAhead() {
+            // Sürekli ön tarafa nesne üretme döngüsü
+            if (player.position.z - lastSpawnZ > spawnDistanceInterval) {
+                lastSpawnZ -= spawnDistanceInterval;
+                spawnObstaclePattern(lastSpawnZ);
+            }
+        }
+
+        function spawnObstaclePattern(zPos) {
+            // Hangi şeritlerde engel çıkacak? (En az 1 şerit boş kalmalı)
+            const patternType = Math.random();
+
+            if (patternType < 0.4) {
+                // Tek bariyer (Yerde)
+                const lane = Math.floor(Math.random() * 3);
+                createBarrier(lanes[lane], zPos, false);
+                // Boş şeritlere altın koyalım
+                spawnCoinsInLane(lane === 0 ? 1 : 0, zPos);
+            } else if (patternType < 0.7) {
+                // Üst geçit engeli (Altından kayılacak)
+                const lane = Math.floor(Math.random() * 3);
+                createBarrier(lanes[lane], zPos, true);
+                spawnCoinsInLane(lane, zPos, true); // Altından geçerken altın toplansın
+            } else {
+                // Çift engel (2 şerit kapalı, 1 şerit açık)
+                const blockedLane1 = Math.floor(Math.random() * 3);
+                let blockedLane2 = (blockedLane1 + 1) % 3;
+                createBarrier(lanes[blockedLane1], zPos, false);
+                createBarrier(lanes[blockedLane2], zPos, false);
+
+                // Açık kalan şeride altın döşiyelim
+                const openLane = 3 - (blockedLane1 + blockedLane2);
+                spawnCoinsInLane(openLane, zPos);
+            }
+        }
+
+        function createBarrier(x, z, isHigh) {
+            const width = 2.2;
+            const height = isHigh ? 0.8 : 1.2;
+            const depth = 0.6;
+            const geo = new THREE.BoxGeometry(width, height, depth);
+            const mat = new THREE.MeshStandardMaterial({ 
+                color: isHigh ? 0xff3366 : 0xffaa00, 
+                roughness: 0.2,
+                emissive: isHigh ? 0x551122 : 0x553300
+            });
+            const barrier = new THREE.Mesh(geo, mat);
+            
+            const yPos = isHigh ? 2.0 : height / 2;
+            barrier.position.set(x, yPos, z);
+            scene.add(barrier);
+
+            obstacles.push({
+                mesh: barrier,
+                isHigh: isHigh,
+                width: width,
+                height: height,
+                depth: depth
+            });
+        }
+
+        function spawnCoinsInLane(laneIdx, zPos, underBarrier = false) {
+            const count = 4;
+            const spacing = 2;
+            const startZ = zPos + 5; // Oyuncuya doğru uzansın
+
+            for (let i = 0; i < count; i++) {
+                const coinGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.1, 16);
+                const coinMat = new THREE.MeshStandardMaterial({ color: 0xffd700, metalness: 0.8, roughness: 0.2, emissive: 0x554400 });
+                const coin = new THREE.Mesh(coinGeo, coinMat);
+                coin.rotation.z = Math.PI / 2;
+
+                const coinY = underBarrier ? 0.5 : 0.8;
+                coin.position.set(lanes[laneIdx], coinY, startZ - (i * spacing));
+                scene.add(coin);
+
+                coins.push({
+                    mesh: coin,
+                    collected: false
+                });
+            }
+        }
+
+        // --- CONTROLS ---
+        function setupControls() {
+            // Keyboard Controls
+            window.addEventListener('keydown', (e) => {
+                if (!gameStarted || gameOver) return;
+
+                if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') {
+                    if (currentLaneIndex > 0) {
+                        currentLaneIndex--;
+                        targetX = lanes[currentLaneIndex];
+                    }
+                } else if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') {
+                    if (currentLaneIndex < 2) {
+                        currentLaneIndex++;
+                        targetX = lanes[currentLaneIndex];
+                    }
+                } else if ((e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') && !isJumping && !isCrouching) {
+                    isJumping = true;
+                    jumpVelocity = jumpForce;
+                } else if ((e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') && !isJumping && !isCrouching) {
+                    isCrouching = true;
+                    crouchTimer = 40; // Eğilme süresi frame cinsinden
+                    player.scale.set(1, 0.5, 1);
+                    player.position.y = 0.3;
+                }
+            });
+
+            // Touch / Swipe Controls for Mobile
+            let touchStartX = 0;
+            let touchStartY = 0;
+
+            window.addEventListener('touchstart', (e) => {
+                touchStartX = e.touches[0].clientX;
+                touchStartY = e.touches[0].clientY;
+            }, { passive: true });
+
+            window.addEventListener('touchend', (e) => {
+                if (!gameStarted || gameOver) return;
+
+                const touchEndX = e.changedTouches[0].clientX;
+                const touchEndY = e.changedTouches[0].clientY;
+
+                const diffX = touchEndX - touchStartX;
+                const diffY = touchEndY - touchStartY;
+
+                if (Math.abs(diffX) > Math.abs(diffY)) {
+                    // Yatay Kaydırma (Şerit Değiştirme)
+                    if (diffX > 30 && currentLaneIndex < 2) {
+                        currentLaneIndex++;
+                        targetX = lanes[currentLaneIndex];
+                    } else if (diffX < -30 && currentLaneIndex > 0) {
+                        currentLaneIndex--;
+                        targetX = lanes[currentLaneIndex];
+                    }
+                } else {
+                    // Dikey Kaydırma (Zıplama / Eğilme)
+                    if (diffY < -30 && !isJumping && !isCrouching) {
+                        // Yukarı Swipe -> Zıpla
+                        isJumping = true;
+                        jumpVelocity = jumpForce;
+                    } else if (diffY > 30 && !isJumping && !isCrouching) {
+                        // Aşağı Swipe -> Eğil
+                        isCrouching = true;
+                        crouchTimer = 40;
+                        player.scale.set(1, 0.5, 1);
+                        player.position.y = 0.3;
+                    }
+                }
+            }, { passive: true });
+
+            // Start Button Click
+            document.getElementById('start-btn').addEventListener('click', startGame);
+        }
+
+        function startGame() {
+            // Reset Game Variables
+            gameStarted = true;
+            gameOver = false;
+            score = 0;
+            coinCount = 0;
+            gameSpeed = 0.4;
+            currentLaneIndex = 1;
+            targetX = lanes[currentLaneIndex];
+            player.position.set(targetX, 0, 0);
+            lastSpawnZ = -50;
+
+            // Clear old obstacles and coins from scene
+            obstacles.forEach(obs => scene.remove(obs.mesh));
+            coins.forEach(c => scene.remove(c.mesh));
+            obstacles = [];
+            coins = [];
+
+            // UI Adjustments
+            document.getElementById('menu-screen').classList.add('hidden');
+            document.getElementById('final-stats').classList.add('hidden');
+            document.getElementById('menu-subtitle').classList.remove('hidden');
+        }
+
+        function endGame() {
+            gameOver = true;
+            gameStarted = false;
+
+            // Show Game Over UI
+            document.getElementById('menu-screen').classList.remove('hidden');
+            document.getElementById('menu-subtitle').classList.add('hidden');
+            document.getElementById('final-stats').classList.remove('hidden');
+            document.getElementById('final-score').innerText = Math.floor(score);
+            document.getElementById('final-coins').innerText = coinCount;
+            document.getElementById('start-btn').innerText = 'TEKRAR OYNA';
+        }
+
+        // --- GAME LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (gameStarted && !gameOver) {
+                // Increase score and speed gradually
+                gameSpeed += acceleration;
+                if (gameSpeed > maxGameSpeed) gameSpeed = maxGameSpeed;
+                
+                score += gameSpeed * 1.5;
+                document.getElementById('score-val').innerText = Math.floor(score);
+
+                // Player Lane Smooth Movement (Lerp)
+                player.position.x += (targetX - player.position.x) * 0.2;
+
+                // Jump Physics
+                if (isJumping) {
+                    player.position.y += jumpVelocity;
+                    jumpVelocity += gravity;
+
+                    if (player.position.y <= 0) {
+                        player.position.y = 0;
+                        isJumping = false;
+                    }
+                }
+
+                // Crouch Timer Control
+                if (isCrouching) {
+                    crouchTimer--;
+                    if (crouchTimer <= 0) {
+                        isCrouching = false;
+                        player.scale.set(1, 1, 1);
+                        player.position.y = 0;
+                    }
+                }
+
+                // Move Player Forward (Z axis)
+                player.position.z -= gameSpeed;
+                // Keep camera locked behind player's z progression
+                camera.position.z = player.position.z + 8;
+
+                // Procedural generation ahead
+                checkAndSpawnAhead();
+
+                // Move and Check Obstacles
+                for (let i = obstacles.length - 1; i >= 0; i--) {
+                    const obs = obstacles[i];
+
+                    // Collision Detection (AABB Bounding Box Check)
+                    const pBox = {
+                        minX: player.position.x - 0.35,
+                        maxX: player.position.x + 0.35,
+                        minY: player.position.y,
+                        maxY: player.position.y + (isCrouching ? 0.6 : 1.5),
+                        minZ: player.position.z - 0.25,
+                        maxZ: player.position.z + 0.25
+                    };
+
+                    const oBox = {
+                        minX: obs.mesh.position.x - obs.width / 2,
+                        maxX: obs.mesh.position.x + obs.width / 2,
+                        minY: obs.mesh.position.y - obs.height / 2,
+                        maxY: obs.mesh.position.y + obs.height / 2,
+                        minZ: obs.mesh.position.z - obs.depth / 2,
+                        maxZ: obs.mesh.position.z + obs.depth / 2
+                    };
+
+                    if (
+                        pBox.maxX > oBox.minX && pBox.minX < oBox.maxX &&
+                        pBox.maxY > oBox.minY && pBox.minY < oBox.maxY &&
+                        pBox.maxZ > oBox.minZ && pBox.minZ < oBox.maxZ
+                    ) {
+                        endGame();
+                    }
+
+                    // Remove passed obstacles to save performance
+                    if (obs.mesh.position.z > player.position.z + 5) {
+                        scene.remove(obs.mesh);
+                        obstacles.splice(i, 1);
+                    }
+                }
+
+                // Move and Check Coins Collection
+                for (let i = coins.length - 1; i >= 0; i--) {
+                    const coin = coins[i];
+                    coin.mesh.rotation.y += 0.05; // Altın dönme efekti
+
+                    // Distance-based collection check
+                    const dist = player.position.distanceTo(coin.mesh.position);
+                    if (dist < 1.0 && !coin.collected) {
+                        coin.collected = true;
+                        scene.remove(coin.mesh);
+                        coins.splice(i, 1);
+                        coinCount++;
+                        document.getElementById('coins-val').innerText = coinCount;
+                    } else if (coin.mesh.position.z > player.position.z + 5) {
+                        scene.remove(coin.mesh);
+                        coins.splice(i, 1);
+                    }
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Run Init on Load
+        window.onload = init;
+    </script>
+</body>
+</html>
